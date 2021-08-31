@@ -180,64 +180,6 @@ namespace EncryptApi.Services
             }
         }
 
-        // Async version of encryption function
-        public static async Task<GcmOutput> AES128GCMeAsync(byte[] IV, byte[] _P, byte[] _A, byte[] K)
-        {
-            var last_len_a = (_A.Length % 16 == 0) ? 16 : _A.Length % 16;
-            var last_len_p = (_P.Length % 16 == 0) ? 16 : _P.Length % 16;
-            var len_a = (last_len_a == 16) ? (_A.Length >> 4) : (_A.Length >> 4 + 1);
-            var len_p = (last_len_p == 16) ? (_P.Length >> 4) : (_P.Length >> 4 + 1);
-            var C = new byte[_P.Length];
-            var T = new byte[16];
-            var H = Aes128Service.AES128E(new byte[16]
-            {
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-            }, K).Item1;
-            var Y0 = new byte[16];
-            Y0[12] = 0;
-            Y0[13] = 0;
-            Y0[14] = 0;
-            Y0[15] = 1;
-            for (int i = 0; i < 12; i++)
-            {
-                Y0[i] = IV[i];
-            }
-            inc32(Y0);
-            var task = Task.Factory.StartNew(() =>
-            {
-                Gctr(K, Y0, _P, len_p, last_len_p, C);
-            });
-            byte[] temp = concate_block(len(_A), len(C));
-            await task;
-            len_a <<= 4;
-            len_p <<= 4;
-            var l = len_a + len_p + 16;
-            var tmp = new byte[l];
-            for (int i = 0; i < len_a; i++)
-            {
-                tmp[i] = _A[i];
-            }
-            for (int i = len_a; i < l - 16; i++)
-            {
-                tmp[i] = C[i - len_a];
-            }
-            for (int i = l - 16; i < l; i++)
-            {
-                tmp[i] = temp[i + 16 - l];
-            }
-            var S = Ghash(H, tmp, l >> 4);
-            Y0[12] = 0;
-            Y0[13] = 0;
-            Y0[14] = 0;
-            Y0[15] = 1;
-            for (int i = 0; i < 12; i++)
-            {
-                Y0[i] = IV[i];
-            }
-            Gctr(K, Y0, S, 1, 16, T);
-            return new(C, T);
-        }
-
         public static AesGcmOutput Encryption(AesGcmInput Input)
         {
             var input = Input.ToEncryptInput();
@@ -285,13 +227,13 @@ namespace EncryptApi.Services
             return null;
         }
 
-        // Encryption function
-        static GcmOutput AES128GCMe(byte[] IV, byte[] _P, byte[] _A, byte[] K)
+        // Async version of encryption function
+        public static async Task<GcmOutput> AES128GCMeAsync(byte[] IV, byte[] _P, byte[] _A, byte[] K)
         {
-            var last_len_a = (_A.Length % 16 == 0) ? 16 : _A.Length % 16;
-            var last_len_p = (_P.Length % 16 == 0) ? 16 : _P.Length % 16;
-            var len_a = (last_len_a == 16) ? (_A.Length >> 4) : (_A.Length >> 4 + 1);
-            var len_p = (last_len_p == 16) ? (_P.Length >> 4) : (_P.Length >> 4 + 1);
+            var last_len_a = ((_A.Length & 15) == 0) ? 16 : (_A.Length & 15);
+            var last_len_p = ((_P.Length % 15) == 0) ? 16 : (_P.Length & 15);
+            var len_a = (last_len_a == 16) ? (_A.Length >> 4) : ((_A.Length >> 4) + 1);
+            var len_p = (last_len_p == 16) ? (_P.Length >> 4) : ((_P.Length >> 4) + 1);
             var C = new byte[_P.Length];
             var T = new byte[16];
             var H = Aes128Service.AES128E(new byte[16]
@@ -308,19 +250,31 @@ namespace EncryptApi.Services
                 Y0[i] = IV[i];
             }
             inc32(Y0);
-            Gctr(K, Y0, _P, len_p, last_len_p, C);
+            var task = Task.Factory.StartNew(() =>
+            {
+                Gctr(K, Y0, _P, len_p, last_len_p, C);
+            });
             byte[] temp = concate_block(len(_A), len(C));
+            await task;
             len_a <<= 4;
             len_p <<= 4;
             var l = len_a + len_p + 16;
             var tmp = new byte[l];
-            for (int i = 0; i < len_a; i++)
+            for (int i = 0; i < _A.Length; i++)
             {
                 tmp[i] = _A[i];
             }
-            for (int i = len_a; i < l - 16; i++)
+            for (int i = 0; i < 16 - last_len_a; i++)
+            {
+                tmp[i + _A.Length] = 0;
+            }
+            for (int i = len_a; i < len_a + C.Length; i++)
             {
                 tmp[i] = C[i - len_a];
+            }
+            for (int i = 0; i < 16 - last_len_p; i++)
+            {
+                tmp[i + len_a + C.Length] = 0;
             }
             for (int i = l - 16; i < l; i++)
             {
@@ -339,13 +293,149 @@ namespace EncryptApi.Services
             return new(C, T);
         }
 
+        // Encryption function
+        public static GcmOutput AES128GCMe(byte[] IV, byte[] _P, byte[] _A, byte[] K)
+        {
+            var last_len_a = ((_A.Length & 15) == 0) ? 16 : (_A.Length & 15);
+            var last_len_p = ((_P.Length & 15) == 0) ? 16 : (_P.Length & 15);
+            var len_a = (last_len_a == 16) ? (_A.Length >> 4) : ((_A.Length >> 4) + 1);
+            var len_p = (last_len_p == 16) ? (_P.Length >> 4) : ((_P.Length >> 4) + 1);
+            var C = new byte[_P.Length];
+            var T = new byte[16];
+            var H = Aes128Service.AES128E(new byte[16]
+            {
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            }, K).Item1;
+            var Y0 = new byte[16];
+            Y0[12] = 0;
+            Y0[13] = 0;
+            Y0[14] = 0;
+            Y0[15] = 1;
+            for (int i = 0; i < 12; i++)
+            {
+                Y0[i] = IV[i];
+            }
+            inc32(Y0);
+            Gctr(K, Y0, _P, len_p, last_len_p, C);
+
+            byte[] temp = concate_block(len(_A), len(C));
+            len_a <<= 4;
+            len_p <<= 4;
+            var l = len_a + len_p + 16;
+            var tmp = new byte[l];
+            for (int i = 0; i < _A.Length; i++)
+            {
+                tmp[i] = _A[i];
+            }
+            for (int i = 0; i < 16 - last_len_a; i++)
+            {
+                tmp[i + _A.Length] = 0;
+            }
+            for (int i = len_a; i < len_a + C.Length; i++)
+            {
+                tmp[i] = C[i - len_a];
+            }
+            for (int i = 0; i < 16 - last_len_p; i++)
+            {
+                tmp[i + len_a + C.Length] = 0;
+            }
+            for (int i = l - 16; i < l; i++)
+            {
+                tmp[i] = temp[i + 16 - l];
+            }
+            var S = Ghash(H, tmp, l >> 4);
+            Y0[12] = 0;
+            Y0[13] = 0;
+            Y0[14] = 0;
+            Y0[15] = 1;
+            for (int i = 0; i < 12; i++)
+            {
+                Y0[i] = IV[i];
+            }
+            Gctr(K, Y0, S, 1, 16, T);
+            return new(C, T);
+        }
+
+        // Decryption function
+        public static byte[] AES128GCMd(byte[] IV, byte[] _C, byte[] K, byte[] _A, byte[] _T)
+        {
+            var last_len_a = ((_A.Length & 15) == 0) ? 16 : (_A.Length & 15);
+            var last_len_c = ((_C.Length & 15) == 0) ? 16 : (_C.Length & 15);
+            var len_a = (last_len_a == 16) ? (_A.Length >> 4) : ((_A.Length >> 4) + 1);
+            var len_c = (last_len_c == 16) ? (_C.Length >> 4) : ((_C.Length >> 4) + 1);
+            var P = new byte[_C.Length];
+            var T = new byte[16];
+            var H = Aes128Service.AES128E(new byte[16]
+            {
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            }, K).Item1;
+            var Y0 = new byte[16];
+            Y0[12] = 0;
+            Y0[13] = 0;
+            Y0[14] = 0;
+            Y0[15] = 1;
+            for (int i = 0; i < 12; i++)
+            {
+                Y0[i] = IV[i];
+            }
+            inc32(Y0);
+
+            Gctr(K, Y0, _C, len_c, last_len_c, P);
+
+            byte[] temp = concate_block(len(_A), len(_C));
+            len_a <<= 4;
+            len_c <<= 4;
+            var l = len_a + len_c + 16;
+            var tmp = new byte[l];
+            for (int i = 0; i < _A.Length; i++)
+            {
+                tmp[i] = _A[i];
+            }
+            for (int i = 0; i < 16 - last_len_a; i++)
+            {
+                tmp[i + _A.Length] = 0;
+            }
+            for (int i = len_a; i < len_a + _C.Length; i++)
+            {
+                tmp[i] = _C[i - len_a];
+            }
+            for (int i = 0; i < 16 - last_len_c; i++)
+            {
+                tmp[i + len_a + _C.Length] = 0;
+            }
+            for (int i = l - 16; i < l; i++)
+            {
+                tmp[i] = temp[i + 16 - l];
+            }
+            var S = Ghash(H, tmp, l >> 4);
+            Y0[12] = 0;
+            Y0[13] = 0;
+            Y0[14] = 0;
+            Y0[15] = 1;
+            for (int i = 0; i < 12; i++)
+            {
+                Y0[i] = IV[i];
+            }
+            Gctr(K, Y0, S, 1, 16, T);
+
+            for (int i = 0; i < 16; i++)
+            {
+                if (T[i] != _T[i])
+                {
+                    Console.WriteLine("FAIL");
+                    return new byte[1] { 0 };
+                }
+            }
+            return P;
+        }
+
         // Async version of decryption function
         public static async Task<byte[]> AES128GCMdAsync(byte[] IV, byte[] _C, byte[] K, byte[] _A, byte[] _T)
         {
-            var last_len_a = (_A.Length % 16 == 0) ? 16 : _A.Length % 16;
-            var last_len_c = (_C.Length % 16 == 0) ? 16 : _C.Length % 16;
-            var len_a = (last_len_a == 16) ? (_A.Length >> 4) : (_A.Length >> 4 + 1);
-            var len_c = (last_len_c == 16) ? (_C.Length >> 4) : (_C.Length >> 4 + 1);
+            var last_len_a = ((_A.Length & 15) == 0) ? 16 : (_A.Length & 15);
+            var last_len_c = ((_C.Length & 15) == 0) ? 16 : (_C.Length & 15);
+            var len_a = (last_len_a == 16) ? (_A.Length >> 4) : ((_A.Length >> 4) + 1);
+            var len_c = (last_len_c == 16) ? (_C.Length >> 4) : ((_C.Length >> 4) + 1);
             var P = new byte[_C.Length];
             var T = new byte[16];
             var H = Aes128Service.AES128E(new byte[16]
@@ -374,78 +464,21 @@ namespace EncryptApi.Services
             len_c <<= 4;
             var l = len_a + len_c + 16;
             var tmp = new byte[l];
-            for (int i = 0; i < len_a; i++)
+            for (int i = 0; i < _A.Length; i++)
             {
                 tmp[i] = _A[i];
             }
-            for (int i = len_a; i < l - 16; i++)
+            for (int i = 0; i < 16 - last_len_a; i++)
+            {
+                tmp[i + _A.Length] = 0;
+            }
+            for (int i = len_a; i < len_a + _C.Length; i++)
             {
                 tmp[i] = _C[i - len_a];
             }
-            for (int i = l - 16; i < l; i++)
+            for (int i = 0; i < 16 - last_len_c; i++)
             {
-                tmp[i] = temp[i + 16 - l];
-            }
-            var S = Ghash(H, tmp, l >> 4);
-            Y0[12] = 0;
-            Y0[13] = 0;
-            Y0[14] = 0;
-            Y0[15] = 1;
-            for (int i = 0; i < 12; i++)
-            {
-                Y0[i] = IV[i];
-            }
-            Gctr(K, Y0, S, 1, 16, T);
-
-            for (int i = 0; i < 16; i++)
-            {
-                if (T[i] != _T[i])
-                {
-                    throw UnauthorizedAccessException();
-                }
-            }
-            return P;
-        }
-
-
-        // Decryption function
-        static byte[] AES128GCMd(byte[] IV, byte[] _C, byte[] K, byte[] _A, byte[] _T)
-        {
-            var last_len_a = (_A.Length % 16 == 0) ? 16 : _A.Length % 16;
-            var last_len_c = (_C.Length % 16 == 0) ? 16 : _C.Length % 16;
-            var len_a = (last_len_a == 16) ? (_A.Length >> 4) : (_A.Length >> 4 + 1);
-            var len_c = (last_len_c == 16) ? (_C.Length >> 4) : (_C.Length >> 4 + 1);
-            var P = new byte[_C.Length];
-            var T = new byte[16];
-            var H = Aes128Service.AES128E(new byte[16]
-            {
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-            }, K).Item1;
-            var Y0 = new byte[16];
-            Y0[12] = 0;
-            Y0[13] = 0;
-            Y0[14] = 0;
-            Y0[15] = 1;
-            for (int i = 0; i < 12; i++)
-            {
-                Y0[i] = IV[i];
-            }
-            inc32(Y0);
-
-            Gctr(K, Y0, _C, len_c, last_len_c, P);
-
-            byte[] temp = concate_block(len(_A), len(_C));
-            len_a <<= 4;
-            len_c <<= 4;
-            var l = len_a + len_c + 16;
-            var tmp = new byte[l];
-            for (int i = 0; i < len_a; i++)
-            {
-                tmp[i] = _A[i];
-            }
-            for (int i = len_a; i < l - 16; i++)
-            {
-                tmp[i] = _C[i - len_a];
+                tmp[i + len_a + _C.Length] = 0;
             }
             for (int i = l - 16; i < l; i++)
             {

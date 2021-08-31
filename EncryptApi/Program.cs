@@ -1,4 +1,4 @@
-using EncryptApi.Models;
+﻿using EncryptApi.Models;
 using EncryptApi.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Hosting;
